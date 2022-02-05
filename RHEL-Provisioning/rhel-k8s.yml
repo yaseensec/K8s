@@ -1,0 +1,131 @@
+---
+- hosts: Nodes
+  become: true
+  gather_facts: no
+
+  handlers:
+    - name: restart docker
+      service: 
+        name: docker 
+        state: restarted
+    
+    - name: daemon reload
+      systemd: 
+        name: docker 
+        daemon_reload: yes
+        state: restarted
+  
+  tasks:
+    - name: Clean Cache
+      command: yum clean expire-cache
+
+    - name: Update System
+      yum: 
+        name: "*"
+        state: latest
+
+    - name: Put SELinux in permissive mode, logging actions that would be blocked.
+      ansible.posix.selinux:
+        policy: targeted
+        state: permissive
+
+    - name: Disable Firewalld
+      service:
+        name: firewalld
+        state: stopped
+        enabled: false
+
+    - name: Disable swap for current session
+      command: swapoff -a
+
+    - name: Disable swap permanently, persist reboots
+      replace:
+        path: /etc/fstab
+        regexp: '^(\s*)([^#\n]+\s+)(\w+\s+)swap(\s+.*)$'
+        replace: '#\1\2\3swap\4'
+        backup: yes
+    
+    - name: Load br_netfilter module
+      community.general.modprobe:
+        name: br_netfilter
+        state: present
+   
+    - name: Let Iptables see Bridged Traffic
+      ansible.posix.sysctl:
+        name: "{{ item }}"
+        value: '1'
+        state: present
+        sysctl_set: yes
+        reload: yes
+      with_items:
+        - net.bridge.bridge-nf-call-ip6tables
+        - net.bridge.bridge-nf-call-iptables
+
+    - name: Adding Docker repo
+      yum_repository:
+        name: Docker-CE
+        description: “Repo for Docker-CE”
+        baseurl: https://download.docker.com/linux/centos/8/x86_64/stable/ 
+        enabled: yes
+        gpgcheck: yes
+        gpgkey: https://download.docker.com/linux/centos/gpg
+
+    - name: Installing Docker-CE
+      yum:
+        state: present
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+    
+    - name: Ensure that Docker is Started and Enabled at boot 
+      service: 
+        name: docker 
+        state: started
+        enabled: true
+
+    - name: Copy Docker daemon.json
+      copy:
+        src: ./daemon.json
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: u=rw,g=r,o=r
+        backup: yes
+      notify: 
+        - daemon reload
+        #- restart docker
+
+    - name: Adding Kubernetes repo
+      yum_repository:
+        name: Kubernetes
+        description: “Repo for Kubernetes”
+        baseurl: https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64 
+        enabled: yes
+        gpgcheck: yes
+        repo_gpgcheck: yes
+        gpgkey: 
+          - https://packages.cloud.google.com/yum/doc/yum-key.gpg
+          - https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+        exclude: kubelet kubeadm kubectl
+        state: present
+
+    - name: Installing Kubedam,kubectl,kubelet
+      yum:
+        state: present
+        name:
+          - kubectl
+          - kubeadm
+          - kubelet
+        disable_excludes: Kubernetes
+
+    - name: Enable Kubelet Service
+      service:
+        name: kubelet 
+        state: started
+        enabled: true
+
+
+
+
+
